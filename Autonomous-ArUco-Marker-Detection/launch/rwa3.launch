@@ -1,0 +1,41 @@
+<launch>
+  <arg name="world_name" default="$(find rwa3_group)/world/empty.world" />
+  <arg name="robot_name" value="explorer" />
+  <arg name="init_pose" value="-x 1 -y 1 -z 0" />
+
+  <!-- Launch gazebo -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(arg world_name)" />
+    <arg name="paused" value="false" />
+    <arg name="use_sim_time" value="true" />
+    <arg name="gui" value="true" />
+    <arg name="verbose" value="false" />
+    <arg name="debug" value="false" />
+    <arg name="output" value="screen" />
+  </include>
+
+  <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_description)/urdf/turtlebot3_waffle.urdf.xacro laser_visual:=false" />
+
+ <!-- start marker detector -->
+  <node name="aruco_detect" pkg="aruco_detect" type="aruco_detect">
+    <param name="image_transport" value="compressed" />
+    <param name="publish_images" value="true" />
+    <param name="fiducial_len" value="0.15" />
+    <param name="dictionary" value="0" />
+    <param name="do_pose_estimation" value="true" />
+    <param name="ignore_fiducials" value="" />
+    <param name="fiducial_len_override" value="" />
+    <remap from="/camera/compressed" to="/camera/rgb/image_raw/compressed" />
+    <remap from="/camera_info" to="/camera/rgb/camera_info" />
+  </node>
+
+
+  <!-- launch rviz -->
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find rwa3_group)/rviz/rwa3.rviz" />
+
+  <!-- spawn the turtlebot -->
+  <node name="spawn_turtlebot" pkg="gazebo_ros" type="spawn_model" args="$(arg init_pose) -urdf -param robot_description -model $(arg robot_name)" respawn="false" output="screen" />
+  
+  <!-- start robot state publisher on tf-->
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" output="screen" />
+</launch>

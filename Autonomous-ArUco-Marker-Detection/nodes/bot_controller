@@ -1,0 +1,508 @@
+#!/usr/bin/env python
+
+from multiprocessing.connection import wait
+import time
+import rospy
+import sys
+from rwa3_group1.util import compute_distance
+import tf
+import yaml
+from geometry_msgs.msg import Twist, Point
+from nav_msgs.msg import Odometry
+from tf.transformations import euler_from_quaternion
+from math import radians, degrees, atan2, pi
+from sensor_msgs.msg import LaserScan
+import rospy
+from fiducial_msgs.msg import FiducialTransformArray
+from yaml import Loader, load, dump
+
+# added test comment
+class BotController(object):
+    """
+    A controller class to drive a turtlebot in Gazebo.
+    """
+
+    def __init__(self, rate=4):
+        rospy.init_node('bot_controller')
+        rospy.loginfo('Press Ctrl c to exit')
+        self._velocity_publisher = rospy.Publisher(
+            'cmd_vel', Twist, queue_size=10)
+        rospy.Subscriber("odom", Odometry, self.odom_callback)
+        # rospy.Subscriber("scan", LaserScan, self.sensor_callback)
+        rospy.Subscriber("fiducial_transforms",
+                         FiducialTransformArray, self.marker_callback)
+
+        self.marker_detected = False
+        self._rate = rospy.Rate(rate)
+        self._robot_name = 'waffle'
+        self._velocity_msg = Twist()
+        self._kp_linear = 0.1
+        self._kp_angular = 0.5
+        self._velocity_msg.linear.x = 0.1
+        self._velocity_msg.angular.z = 0.1
+        self._current_x_pos = None
+        self._current_y_pos = None
+        self.current_z_pos = None
+        self._current_orientation = None
+        self._initial_orientation = None
+        self._yaw = None
+        # start position of the robot
+        self._initial_x_pos = None
+        self._initial_y_pos = None
+        # marker final values
+        self.marker0_xpos = None
+        self.marker0_ypos = None
+        self.marker0_zpos = None
+        self.marker0_r = None
+        self.marker0_p = None
+        self.marker0_y = None
+
+        self.marker1_xpos = None
+        self.marker1_ypos = None
+        self.marker1_zpos = None
+        self.marker1_r = None
+        self.marker1_p = None
+        self.marker1_y = None
+
+        self.marker2_xpos = None
+        self.marker2_ypos = None
+        self.marker2_zpos = None
+        self.marker2_r = None
+        self.marker2_p = None
+        self.marker2_y = None
+
+        self.marker0_list = []
+        self.marker1_list = []
+        self.marker2_list = []
+        self.fiducial_id = None
+
+        # set up a tf listener to retrieve transform between the robot and the world
+        self._tf_listener = tf.TransformListener()
+        # parent frame for the listener
+        self._parent_frame = '/odom'
+        # child frame for the listener
+        self._child_frame = '/base_footprint'
+
+    @property
+    def current_x_pos(self):
+        return self._current_x_pos
+
+    @current_x_pos.setter
+    def current_x_pos(self, x):
+        self._current_x_pos = x
+
+    @property
+    def current_y_pos(self):
+        return self._current_y_pos
+
+    @current_y_pos.setter
+    def current_y_pos(self, y):
+        self._current_y_pos = y
+
+    @property
+    def current_orientation(self):
+        return self._current_orientation
+
+    @current_orientation.setter
+    def current_orientation(self, orientation):
+        self._current_orientation = orientation
+
+    def marker_callback(self, msg):
+        """
+        Gets data from topic /fiducial_transforms and creates a broadcast called marker
+        Args:
+            msg:
+        """
+
+        if msg.transforms:
+            rospy.loginfo('ArUco Marker : DETECTED')
+            self.marker_detected = True
+            for m in msg.transforms:
+                x_pos = m.transform.translation.x
+                y_pos = m.transform.translation.y
+                z_pos = m.transform.translation.z
+                x_rot = m.transform.rotation.x
+                y_rot = m.transform.rotation.y
+                z_rot = m.transform.rotation.z
+                w_rot = m.transform.rotation.w
+                self.fiducial_id = m.fiducial_id
+                rospy.loginfo("Pose for {}: [{},{},{}] [{},{},{},{}]"
+                              .format(self._robot_name, x_pos, y_pos, z_pos, x_rot, y_rot, z_rot, w_rot))
+                self.broadcast_marker(
+                    x_pos, y_pos, z_pos, x_rot, y_rot, z_rot, w_rot, "/marker")
+
+                # self.broadcast()
+                # if self.fiducial_id == 0:
+                #     # create broadcast for marker
+                #     self.broadcast_marker(
+                #     x_pos, y_pos, z_pos, x_rot, y_rot, z_rot, w_rot, 'fiducial_0')
+                #     # self.marker0_list = [x_pos, y_pos, z_pos, x_rot, y_rot, z_rot, w_rot]
+                # elif self.fiducial_id == 1:
+                #     self.broadcast_marker(
+                #     x_pos, y_pos, z_pos, x_rot, y_rot, z_rot, w_rot, 'fiducial_1')
+                #     # self.marker1_list = [ x_pos, y_pos, z_pos, x_rot, y_rot, z_rot, w_rot]
+                # elif self.fiducial_id == 2:
+                #     self.broadcast_marker(
+                #     x_pos, y_pos, z_pos, x_rot, y_rot, z_rot, w_rot, 'fiducial_2')
+                #     # self.marker2_list = [ x_pos, y_pos, z_pos, x_rot, y_rot, z_rot, w_rot]
+                # else:
+                #     rospy.loginfo('Marker id is different.')
+
+                self.marker_detected = False
+
+        else:
+            self.marker_detected = False
+            rospy.loginfo('ArUco Marker : NOT DETECTED...Searching...')
+
+    def odom_callback(self, msg):
+        """
+        Callback function for the Topic odom
+
+        Args:
+            msg (nav_msgs/Odometry): Odometry message
+        """
+        quaternion = (msg.pose.pose.orientation.x, msg.pose.pose.orientation.y,
+                      msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
+
+        self.current_x_pos = msg.pose.pose.position.x
+        self.current_y_pos = msg.pose.pose.position.y
+        self.current_z_pos = msg.pose.pose.position.z
+        self.current_orientation = euler_from_quaternion(quaternion)
+
+    def get_transform(self, parent_frame, child_frame):
+        """
+        Get the current pose of the marker in the world frame.
+        """
+        try:
+            now = rospy.Time.now()
+            self._tf_listener.waitForTransform(parent_frame,
+                                               child_frame,
+                                               now,
+                                               rospy.Duration(5))
+            (trans, rot) = self._tf_listener.lookupTransform(
+                self._parent_frame, self._child_frame, now)
+            self.current_x_pos = trans[0]
+            self.current_y_pos = trans[1]
+            self.current_z_pos = trans[2]
+            rot_euler = euler_from_quaternion(rot)
+            self.current_orientation = rot_euler
+
+            rospy.loginfo("odom: ({},{}), {}".format(
+                self.current_x_pos,
+                self.current_y_pos,
+                self.current_z_pos,
+                self.current_orientation[2]))
+
+        except (tf.Exception, tf.ConnectivityException, tf.LookupException):
+            rospy.logfatal("TF Exception")
+
+    def go_straight_tf(self, distance_to_drive, forward=True):
+        """
+        Move a robot in a straight line.
+        This version uses a TF listener.
+
+        Args:
+            distance_to_drive (float): Distance to drive in meter.
+            forward (bool, optional): Direction. Defaults to True.
+        """
+        self.get_transform(self._parent_frame, self._child_frame)
+        self._initial_x_pos = self.current_x_pos
+        self._initial_y_pos = self.current_y_pos
+
+        linear_velocity = 0.0
+        if distance_to_drive > 0:
+            linear_velocity = 0.3
+        elif distance_to_drive < 0:
+            linear_velocity = -0.3
+
+        # compute the driven distance
+        driven_distance = compute_distance(
+            self._initial_x_pos,
+            self._initial_y_pos,
+            self.current_x_pos,
+            self.current_y_pos)
+
+        # keep moving the robot until the distance is reached
+        while not rospy.is_shutdown():
+            if driven_distance <= abs(distance_to_drive):
+                driven_distance = compute_distance(
+                    self._initial_x_pos,
+                    self._initial_y_pos,
+                    self.current_x_pos,
+                    self.current_y_pos)
+                rospy.loginfo("Distance driven: {}".format(driven_distance))
+                self.run(linear_velocity, 0)
+            else:
+                self.run(0, 0)
+                break
+            self._rate.sleep()
+
+    def go_straight_time(self, distance_to_drive, forward=True):
+        """
+        Move the robot in a straight line.
+        This version uses the formula:
+        distance = velocity * (t0 - tcurrent)
+
+        Args:
+            distance_to_drive (float): distance to drive in meter.
+            forward (bool, optional): Direction. Defaults to True.
+        """
+        # original time
+        rospy.sleep(2)
+        t_0 = rospy.Time.now().to_sec()
+
+        linear_velocity = 0.0
+        if forward:
+            linear_velocity = 0.3
+        else:
+            linear_velocity = -0.3
+
+        # keep moving the robot until the distance is reached
+        while not rospy.is_shutdown():
+            # current time
+            t_1 = rospy.Time.now().to_sec()
+            driven_distance = (t_1 - t_0) * abs(self._velocity_msg.linear.x)
+            rospy.loginfo("Distance driven: {}".format(driven_distance))
+            if driven_distance <= distance_to_drive:
+                self.run(linear_velocity, 0)
+            else:
+                self.run(0, 0)
+                break
+            self._rate.sleep()
+
+    def rotate(self, relative_angle):
+        """
+        Rotate the robot a relative angle
+
+        Args:
+            relative_angle (float): Relative angle
+        """
+        if relative_angle > 0:
+            angular_velocity = 0.5
+        elif relative_angle < 0:
+            angular_velocity = -0.5
+        else:
+            angular_velocity = 0.0
+        rospy.sleep(2.0)
+        t0 = rospy.Time.now().to_sec()
+        # keep rotating the robot until the desired relative rotation is reached
+        while not rospy.is_shutdown():
+            self.run(0, angular_velocity)
+            self._rate.sleep()
+            t_current = rospy.Time.now().to_sec()
+
+            rospy.loginfo("t0: {t}".format(t=t0))
+            rospy.loginfo("t1: {t}".format(t=t_current))
+            current_angle = (t_current - t0) * angular_velocity
+            rospy.loginfo("current angle: {}".format(current_angle))
+            if abs(current_angle) >= radians(abs(relative_angle)):
+                rospy.loginfo("Relative angle reached")
+                self.run(0, 0)
+                break
+
+    def go_to_goal(self, goal_x, goal_y):
+        """
+        Make the robot reach a 2D goal using a proportional controller
+
+        Args:
+            goal_x (float): x position
+            goal_y (float): y position
+        """
+        rospy.loginfo("Go to goal ({}, {})".format(goal_x, goal_y))
+        # get position and yaw from transform
+        self.get_transform(self._parent_frame, self._child_frame)
+
+        distance_to_goal = compute_distance(
+            self.current_x_pos, self.current_y_pos, goal_x, goal_y)
+
+        while not rospy.is_shutdown():
+            move_cmd = Twist()
+            if distance_to_goal > 0.05:
+                distance_to_goal = compute_distance(self.current_x_pos,
+                                                    self.current_y_pos, goal_x, goal_y)
+                # compute the heading
+                angle_to_goal = atan2(
+                    goal_y - self.current_y_pos, goal_x - self.current_x_pos)
+
+                rospy.loginfo("Distance to goal: {}".format(distance_to_goal))
+                rospy.loginfo("Angle to goal: {}".format(angle_to_goal))
+
+                # Make the robot rotate the correct direction
+                if angle_to_goal < 0:
+                    angle_to_goal = 2 * pi + angle_to_goal
+
+                # compute relative orientation between robot and goal
+                w = angle_to_goal - self.current_orientation[2]
+                if w > pi:
+                    w = w - 2 * pi
+
+                # proportional control for angular velocity
+                move_cmd.angular.z = self._kp_angular * w
+
+                if move_cmd.angular.z > 0:
+                    move_cmd.angular.z = min(move_cmd.angular.z, 1.5)
+                else:
+                    move_cmd.angular.z = max(move_cmd.angular.z, -1.5)
+
+                # proportional control for linear velocity
+                move_cmd.linear.x = min(
+                    self._kp_linear * distance_to_goal, 0.6)
+
+                self._velocity_publisher.publish(move_cmd)
+                self._rate.sleep()
+            else:
+                rospy.loginfo("Goal reached")
+                break
+
+    def rotate_in_place(self):
+        self.run(0, 0.2)
+
+    def continue_program(self):
+        self.go_to_goal(5, 0)
+        self.rotate_in_place()
+        # Gets transform from marker frame to odom
+        self.get_transform('/odom', '/marker')
+        self.marker1_xpos = self.current_x_pos
+        self.marker1_ypos = self.current_y_pos
+        self.marker1_zpos = self.current_z_pos
+        self.marker1_r = self.current_orientation[0]
+        self.marker1_p = self.current_orientation[1]
+        self.marker1_y = self.current_orientation[2]
+        controller.update_yaml()
+
+        self.go_to_goal(3, -6)
+        self.rotate_in_place()
+        # Gets transform from marker frame to odom
+        self.get_transform('/odom', '/marker')
+        self.marker2_xpos = self.current_x_pos
+        self.marker2_ypos = self.current_y_pos
+        self.marker2_zpos = self.current_z_pos
+        self.marker2_r = self.current_orientation[0]
+        self.marker2_p = self.current_orientation[1]
+        self.marker2_y = self.current_orientation[2]
+        controller.update_yaml()
+
+        self.go_to_goal(3, 6)
+        self.rotate_in_place()
+        self.get_transform('/marker', '/odom')
+        self.marker0_xpos = self.current_x_pos
+        self.marker0_ypos = self.current_y_pos
+        self.marker0_zpos = self.current_z_pos
+        self.marker0_r = self.current_orientation[0]
+        self.marker0_p = self.current_orientation[1]
+        self.marker0_y = self.current_orientation[2]
+        controller.update_yaml()
+
+        rospy.loginfo("[INFO]: All three aruco markers detected!")
+        rospy.loginfo("[INFO]: Updating yaml file.............")
+        self.go_to_goal(1, 1)
+        # exit()
+
+    def run(self, linear, angular):
+        """
+        Publish linear and angular velocities to cmd_vel Topic.
+
+        Args:
+            linear (float): linear velocity
+            angular (float): angular velocity
+        """
+
+        velocity = Twist()
+        velocity.linear.x = linear
+        velocity.angular.z = angular
+        self._velocity_publisher.publish(velocity)
+        rospy.sleep(25.0)
+
+    def myhook(self):
+        """
+        Function to call when shutting down a Node
+        """
+        rospy.loginfo("shutdown time!")
+
+    def handle_inputs(self):
+        """
+        Handle arguments passed to the command line
+        """
+
+        # get the action to perform
+        # drive straight, rotate, or go to goal
+        action_name = rospy.get_param("~action")
+
+        if action_name == "drive":
+            distance = rospy.get_param("~distance")
+            if distance > 0:
+                self.go_straight_tf(distance, True)
+            elif distance < 0:
+                self.go_straight_tf(distance, False)
+            else:
+                rospy.logerr("Distance not provided")
+                rospy.on_shutdown(self.myhook)
+                sys.exit(1)
+        elif action_name == "rotate":
+            angle = rospy.get_param("~angle")
+            if angle:
+                self.rotate(angle)
+            else:
+                rospy.logerr("Angle not provided")
+                rospy.on_shutdown(self.myhook)
+                sys.exit(1)
+        elif action_name == "goal":
+            x = rospy.get_param("~x")
+            y = rospy.get_param("~y")
+            if x and y or x == 0 or y == 0:
+                self.go_to_goal(x, y)
+            else:
+                rospy.logerr("x or y is missing")
+                rospy.on_shutdown(self.myhook)
+                sys.exit(1)
+        elif action_name == "broadcast":
+            while not rospy.is_shutdown():
+                self.broadcast()
+        elif action_name == "yaml":
+            self.update_yaml()
+        else:
+            rospy.logerr("Unknown action")
+            rospy.on_shutdown(self.myhook)
+            sys.exit(1)
+
+    def broadcast(self):
+        br = tf.TransformBroadcaster()
+        br.sendTransform((0.1, 0.2, 1),
+                         tf.transformations.quaternion_from_euler(0, 0, 3.14),
+                         rospy.Time.now(),
+                         "marker",
+                         "/camera_rgb_optical_frame")
+
+    def broadcast_marker(self, x, y, z, rot_x, rot_y, rot_z, rot_w, marker_name):
+        br = tf.TransformBroadcaster()
+        br.sendTransform((x, y, z), (rot_x, rot_y, rot_z, rot_w), rospy.Time.now(),
+                         marker_name,
+                         "/camera_rgb_optical_frame")
+
+    def update_yaml(self):
+        fname = "/home/mahima/enpm809e_ws/src/rwa3_group1/output/output.yaml"
+        stream = open(fname, 'r')
+        data = yaml.load(stream, Loader=Loader)
+        data['aruco_marker_0']['xyz'] = [
+            self.marker0_xpos, self.marker0_ypos, self.marker0_zpos]
+        data['aruco_marker_0']['rpy'] = [
+            self.marker0_r, self.marker0_p, self.marker0_y]
+        data['aruco_marker_1']['xyz'] = [
+            self.marker1_xpos, self.marker1_ypos, self.marker1_zpos]
+        data['aruco_marker_1']['rpy'] = [
+            self.marker1_r, self.marker1_p, self.marker1_y]
+        data['aruco_marker_2']['xyz'] = [
+            self.marker2_xpos, self.marker2_ypos, self.marker2_zpos]
+        data['aruco_marker_2']['rpy'] = [
+            self.marker2_r, self.marker2_p, self.marker2_y]
+        with open(fname, 'w') as yaml_file:
+            yaml_file.write(yaml.dump(data, default_flow_style=False))
+
+
+if __name__ == '__main__':
+    try:
+        controller = BotController()
+        controller.continue_program()
+
+    except rospy.ROSInterruptException:
+        rospy.loginfo("Action terminated.")
