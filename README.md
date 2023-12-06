@@ -1,7 +1,7 @@
 # Turtlebot3-Aruco-Autodocking
 A simple turtlebot 3 Aruco Autodocking Algorithm
 
-I just have created the file named Simple_Docking.py. The environmentis just a fork for given link:
+I just have created the file named Simple_Docking.py. The environments just a fork for given link:
 https://github.com/mahimaarora2208/Autonomous-ArUco-Marker-Detection
 
 to see this program work
@@ -30,4 +30,8 @@ After these steps its expected that you may see 3 Arcuo marker and your turtlebo
 for docking algorithm write
 
 rosrun rwa3_group Simple_Docking.py 
+
+A video For explaning and demonstrating the code is given below:
+https://www.youtube.com/watch?v=Ub5L4C1EtKw
+
 
